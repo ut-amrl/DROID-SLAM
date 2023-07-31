@@ -56,6 +56,38 @@ def image_stream(imagedir, calib, stride):
 
         yield t, image[None], intrinsics
 
+# TODO using length of calib to understand what to do
+def rectified_stereo_image_stream(datapath, right_data_path, calib, image_size=[320, 512], stride=1):
+    calib = np.loadtxt(calib, delimiter=" ")
+    fx, fy, cx, cy = calib[:4]
+
+    K = np.eye(3)
+    K[0,0] = fx
+    K[0,2] = cx
+    K[1,1] = fy
+    K[1,2] = cy
+
+    base_images_left = sorted(os.listdir(datapath))[::stride]
+    images_left = [os.path.join(datapath, leftFileName) for leftFileName in base_images_left]
+    images_right = [os.path.join(right_data_path, leftFileName) for leftFileName in base_images_left]
+    for t, (imgL, imgR) in enumerate(zip(images_left, images_right)):
+        if (not os.path.isfile(imgL)) or (not os.path.isfile(imgR)):
+            continue
+        leftImg = cv2.imread(imgL); rightImg = cv2.imread(imgR)
+        h0, w0, _ = leftImg.shape
+        images =[leftImg]; images += [rightImg]
+        images = torch.from_numpy(np.stack(images, 0))
+        images = images.permute(0, 3, 1, 2).to("cuda:0", dtype=torch.float32)
+        images = F.interpolate(images, image_size, mode="bilinear", align_corners=False)
+
+        intrinsics = torch.as_tensor([fx, fy, cx, cy]).cuda()
+        intrinsics[0] *= image_size[1] / w0
+        intrinsics[1] *= image_size[0] / h0
+        intrinsics[2] *= image_size[1] / w0
+        intrinsics[3] *= image_size[0] / h0
+
+        yield stride * t, images, intrinsics
+
 
 def stereo_image_stream(datapath, right_data_path, orb_calib_file, image_size=[320, 512], stride=1):
     """ image generator """
@@ -174,7 +206,8 @@ if __name__ == '__main__':
         imgStreamFunc = partial(image_stream, imagedir=args.imagedir, calib=args.calib, stride=args.stride)
     else:
         args.stereo = True
-        imgStreamFunc = partial(stereo_image_stream, datapath=args.imagedir, right_data_path=args.right_imagedir, orb_calib_file=args.calib, stride=args.stride)
+        # imgStreamFunc = partial(stereo_image_stream, datapath=args.imagedir, right_data_path=args.right_imagedir, orb_calib_file=args.calib, stride=args.stride)
+        imgStreamFunc = partial(rectified_stereo_image_stream, datapath=args.imagedir, right_data_path=args.right_imagedir, calib=args.calib, stride=args.stride)
     torch.multiprocessing.set_start_method('spawn')
 
     droid = None
