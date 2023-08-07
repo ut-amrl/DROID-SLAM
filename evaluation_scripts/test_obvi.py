@@ -10,13 +10,18 @@ import os
 import glob
 import time
 import argparse
+import pandas as pd
 
 from functools import partial
 from torch.multiprocessing import Process
+import evo
+from evo.core.trajectory import PoseTrajectory3D
 from droid import Droid
 
 import torch.nn.functional as F
 
+
+kTrajFilename = "Trajectory.csv"
 
 def show_image(image):
     image = image.permute(1, 2, 0).cpu().numpy()
@@ -56,64 +61,44 @@ def image_stream(imagedir, calib, stride):
 
         yield t, image[None], intrinsics
 
+# TODO using length of calib to understand what to do
+def rectified_stereo_image_stream(datapath, right_data_path, calib, image_size=[280, 512], stride=1):
+    calib = np.loadtxt(calib, delimiter=" ")
+    fx, fy, cx, cy = calib[:4]
 
-def stereo_image_stream(datapath, right_data_path, orb_calib_file, image_size=[320, 512], stride=1):
-    """ image generator """
+    K = np.eye(3)
+    K[0,0] = fx
+    K[0,2] = cx
+    K[1,1] = fy
+    K[1,2] = cy
 
-    # GUIDANCE: For a different dataset, replace the following blocks with the appropriate camera parameters
-    # TODO read from calib file
-
-    K_l = np.array([527.873518, 0.000000, 482.823413, 0.000000, 527.276819, 298.033945, 0.000000, 0.000000, 1.000000]).reshape(3, 3)
-    d_l = np.array([0, 0, 0, 0, 0])
-    R_l = np.array([0.999940, -0.003244, -0.010471, 0.003318, 0.999970, 0.007064, 0.010448, -0.007098, 0.999920]).reshape(3, 3)
-
-    P_l = np.array(
-        [528.955512, 0.000000, 479.748173, 0.000000, 0.000000, 528.955512, 298.607571, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000]).reshape(3,4)
-
-    K_r = np.array([530.158021, 0.000000, 475.540633, 0.000000, 529.682234, 299.995465, 0.000000, 0.000000, 1.000000]).reshape(3, 3)
-    d_r = np.array([0, 0, 0, 0, 0]).reshape(5)
-    R_r = np.array([0.999661, -0.024534, 0.008699, 0.024595, 0.999673, -0.006974, -0.008525, 0.007186, 0.999938]).reshape(3, 3)
-
-    P_r = np.array(
-        [528.955512, 0.000000, 479.748173, -69.690815, 0.000000, 528.955512, 298.607571, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000]).reshape(3, 4)
-
-    intrinsics_vec = [528.955512, 528.955512, 479.748173, 298.607571] # (fx fy cx cy)
-    # End of dataset specific code -----------------------------------------------------------------------------
-
-    # read all png images in folder
     base_images_left = sorted(os.listdir(datapath))[::stride]
-    # images_right = sorted(os.listdir(right_data_path))[::stride]
-
     images_left = [os.path.join(datapath, leftFileName) for leftFileName in base_images_left]
     images_right = [os.path.join(right_data_path, leftFileName) for leftFileName in base_images_left]
-
-    map_l = None
-
     for t, (imgL, imgR) in enumerate(zip(images_left, images_right)):
-
-        if not os.path.isfile(imgR):
+        if (not os.path.isfile(imgL)) or (not os.path.isfile(imgR)):
             continue
-
-        leftImg = cv2.imread(imgL)
-
+        leftImg = cv2.imread(imgL); rightImg = cv2.imread(imgR)
         h0, w0, _ = leftImg.shape
+        # h1 = int(h0 * np.sqrt((image_size[0] * image_size[1]) / (h0 * w0)))
+        # w1 = int(h0 * np.sqrt((image_size[0] * image_size[1]) / (h0 * w0)))
 
-        if (map_l is None):
-            map_l = cv2.initUndistortRectifyMap(K_l, d_l, R_l, P_l[:3, :3], (w0, h0), cv2.CV_32F)
-            map_r = cv2.initUndistortRectifyMap(K_r, d_r, R_r, P_r[:3, :3], (w0, h0), cv2.CV_32F)
-
-        images = [cv2.remap(leftImg, map_l[0], map_l[1], interpolation=cv2.INTER_LINEAR)]
-        images += [cv2.remap(cv2.imread(imgR), map_r[0], map_r[1], interpolation=cv2.INTER_LINEAR)]
-
+        # leftImg = cv2.resize(leftImg, (w1, h1))
+        # rightImg = cv2.resize(rightImg, (w1, h1))
+        images =[leftImg]; images += [rightImg]
         images = torch.from_numpy(np.stack(images, 0))
         images = images.permute(0, 3, 1, 2).to("cuda:0", dtype=torch.float32)
         images = F.interpolate(images, image_size, mode="bilinear", align_corners=False)
 
-        intrinsics = torch.as_tensor(intrinsics_vec).cuda()
+        intrinsics = torch.as_tensor([fx, fy, cx, cy]).cuda()
         intrinsics[0] *= image_size[1] / w0
         intrinsics[1] *= image_size[0] / h0
         intrinsics[2] *= image_size[1] / w0
         intrinsics[3] *= image_size[0] / h0
+        # intrinsics[0] *= (w1 / w0)
+        # intrinsics[1] *= (h1 / h0)
+        # intrinsics[2] *= (w1 / w0)
+        # intrinsics[3] *= (h1 / h0)
 
         yield stride * t, images, intrinsics
 
@@ -131,16 +116,34 @@ def save_reconstruction(droid, reconstruction_path):
     poses = droid.video.poses[:t].cpu().numpy()
     intrinsics = droid.video.intrinsics[:t].cpu().numpy()
 
-    Path("reconstructions/{}".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
-    np.save("reconstructions/{}/tstamps.npy".format(reconstruction_path), tstamps)
-    np.save("reconstructions/{}/images.npy".format(reconstruction_path), images)
-    np.save("reconstructions/{}/disps.npy".format(reconstruction_path), disps)
-    np.save("reconstructions/{}/poses.npy".format(reconstruction_path), poses)
-    np.save("reconstructions/{}/intrinsics.npy".format(reconstruction_path), intrinsics)
+    Path("{}".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
+    np.save("{}/tstamps.npy".format(reconstruction_path), tstamps)
+    np.save("{}/images.npy".format(reconstruction_path), images)
+    np.save("{}/disps.npy".format(reconstruction_path), disps)
+    np.save("{}/poses.npy".format(reconstruction_path), poses)
+    np.save("{}/intrinsics.npy".format(reconstruction_path), intrinsics)
+    
+    return tstamps
+
+def parse_node_ids_and_timestamps(filepath):
+    df = pd.read_csv(filepath)
+    node_ids_and_timestamps = {}
+    for _, row in df.iterrows():
+        node_ids_and_timestamps[int(row["node_id"])] = (row["seconds"], row["nanoseconds"])
+    return node_ids_and_timestamps
+
+def parse_timestamps(filepath):
+    df = pd.read_csv(filepath)
+    timestamps = []
+    for _, row in df.iterrows():
+        timestamps.append((row[" seconds"], row[" nanoseconds"]))
+    return timestamps
+
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("--node_ids_and_timestamps", required=True, type=str, help="path to the file that indicate nodes and their associated timestamp")
     parser.add_argument("--imagedir", type=str, help="path to image directory")
     parser.add_argument("--right_imagedir", default=None, help="optional (supply for stereo), path to directory for right images")
     parser.add_argument("--calib", type=str, help="path to calibration file")
@@ -168,13 +171,14 @@ if __name__ == '__main__':
     parser.add_argument("--reconstruction_path", help="path to saved reconstruction")
     args = parser.parse_args()
 
+    timestamps = parse_timestamps(args.node_ids_and_timestamps)
 
     if (args.right_imagedir is None):
         args.stereo = False
         imgStreamFunc = partial(image_stream, imagedir=args.imagedir, calib=args.calib, stride=args.stride)
     else:
         args.stereo = True
-        imgStreamFunc = partial(stereo_image_stream, datapath=args.imagedir, right_data_path=args.right_imagedir, orb_calib_file=args.calib, stride=args.stride)
+        imgStreamFunc = partial(rectified_stereo_image_stream, datapath=args.imagedir, right_data_path=args.right_imagedir, calib=args.calib, stride=args.stride)
     torch.multiprocessing.set_start_method('spawn')
 
     droid = None
@@ -187,6 +191,7 @@ if __name__ == '__main__':
     for (t, image, intrinsics) in tqdm(imgStreamFunc()):
         if t < args.t0:
             continue
+        tstamps.append(t)
 
         if not args.disable_vis:
             show_image(image[0])
@@ -198,8 +203,43 @@ if __name__ == '__main__':
         droid.track(t, image, intrinsics=intrinsics)
 
     if args.reconstruction_path is not None:
+        print("Initiating save reconstruction")
         save_reconstruction(droid, args.reconstruction_path)
+        print("Done with saving reconstruction")
 
     print("Initiating terminate function")
-    traj_est = droid.terminate(image_stream(args.imagedir, args.calib, args.stride))
+    traj_est = droid.terminate(rectified_stereo_image_stream(datapath=args.imagedir, right_data_path=args.right_imagedir, calib=args.calib, stride=1))
     print("Done with terminate function")
+    
+    savepath = os.path.join(args.reconstruction_path, kTrajFilename)
+    fp = open(savepath, "w")
+    if fp.closed:
+        print("Failed to open file " + savepath)
+        exit(1)
+    fp.write("seconds, nanoseconds, lost, transl_x, transl_y, transl_z, quat_x, quat_y, quat_z, quat_w\n")
+    for i, pose in enumerate(traj_est):
+        fp.write(str(timestamps[i][0]) + ", " + str(timestamps[i][1]))
+        fp.write(", 0") # hardcoding lost to be 0
+        fp.write(", " + str(pose[0]) + ", " + str(pose[1]) + ", " + str(pose[2]) \
+                 + ", " + str(pose[6]) + ", " + str(pose[4]) + ", " + str(pose[5]) + ", " + str(pose[6]) )
+        fp.write("\n")
+    fp.close()
+    print("Done with saving trajectory")
+
+    print(traj_est)
+    print(traj_est.shape)
+
+    # print("-----before-----")
+    # print("positions_xyz shape: ", traj_est[:,:3].shape)
+    # print("orientations_quat_wxyz shape: ", traj_est[:,3:].shape)
+    # print("tstamps shape: ", tstamps.shape)
+    traj_est = PoseTrajectory3D(
+        positions_xyz=traj_est[:,:3],
+        orientations_quat_wxyz=traj_est[:,3:],
+        timestamps=np.array(tstamps))
+    # print("-----after-----")
+    # print("positions_xyz shape: ", traj_est[:,:3].shape)
+    # print("orientations_quat_wxyz shape: ", traj_est[:,3:].shape)
+    # print("tstamps shape: ", tstamps.shape)
+    # print("traj_est: ", traj_est)
+    # print("After obtaining traj_est") 
