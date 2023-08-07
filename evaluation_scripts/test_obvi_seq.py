@@ -23,7 +23,8 @@ import torch.nn.functional as F
 
 
 kTrajFilename = "Trajectory.csv"
-kNodeIdsAndTimestampsFilename = "timestamps/node_ids_and_timestamps.txt"
+kTimestampFilename = "times.txt"
+kNodesAndTimestampFilename = "node_ids_and_timestamps.txt"
 kLeftImageDirName = "image_0"
 kRightImageDirName = "image_1"
 kOrbOutDirName = "orb_out"
@@ -155,9 +156,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--seqfile", required=True, type=str, help="sequence file")
     parser.add_argument("--datadir", required=True, type=str, help="root")
-    # parser.add_argument("--node_ids_and_timestamps", required=True, type=str, help="path to the file that indicate nodes and their associated timestamp")
-    # parser.add_argument("--imagedir", type=str, help="path to image directory")
-    # parser.add_argument("--right_imagedir", default=None, help="optional (supply for stereo), path to directory for right images")
     parser.add_argument("--calib", required=True, type=str, help="path to calibration file")
     parser.add_argument("--t0", default=0, type=int, help="starting frame")
     parser.add_argument("--stride", default=3, type=int, help="frame stride")
@@ -180,7 +178,6 @@ if __name__ == '__main__':
     parser.add_argument("--backend_radius", type=int, default=2)
     parser.add_argument("--backend_nms", type=int, default=3)
     parser.add_argument("--upsample", action="store_true")
-    # parser.add_argument("--reconstruction_path", help="path to saved reconstruction")
     args = parser.parse_args()
 
     if not os.path.exists(args.datadir):
@@ -188,10 +185,6 @@ if __name__ == '__main__':
         exit(1)
     seq_ids, bagnames = parseSeqIdAndBagnamesFromSequenceFile(args.seqfile)
     for seq_id, bagname in zip(seq_ids, bagnames):
-        args.node_ids_and_timestamps = os.path.join(args.datadir, kOrbOutDirName, bagname, kNodeIdsAndTimestampsFilename)
-        if not os.path.exists(args.node_ids_and_timestamps):
-            print("Timestamp file " + args.node_ids_and_timestamps + "doesn't exists!")
-            exit(1)
         droid_input_dir = os.path.join(args.datadir, kDroidInDirName, bagname)
         if not os.path.exists(droid_input_dir):
             print("Droid slam input directory " + droid_input_dir + "doesn't exists!")
@@ -204,6 +197,11 @@ if __name__ == '__main__':
         if not os.path.exists(args.right_imagedir):
             print("Right Image directory " + args.right_imagedir + "doesn't exists!")
             exit(1)
+        args.node_ids_and_timestamps = os.path.join(droid_input_dir, kNodesAndTimestampFilename)
+        if not os.path.exists(args.node_ids_and_timestamps):
+            print("Timestamp file " + args.node_ids_and_timestamps + "doesn't exists!")
+            exit(1)
+
         droid_output_dir = os.path.join(args.datadir, kDroidOutDirName)
         if not os.path.exists(droid_output_dir):
             os.mkdir(args.reconstruction_path)
