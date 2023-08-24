@@ -22,7 +22,7 @@ from droid import Droid
 import torch.nn.functional as F
 
 
-kTrajFilename = "Trajectory.csv"
+kTrajFilename = "trajectory.csv"
 kTimestampFilename = "times.txt"
 kNodesAndTimestampFilename = "node_ids_and_timestamps.txt"
 kLeftImageDirName = "image_0"
@@ -183,8 +183,8 @@ if __name__ == '__main__':
     if not os.path.exists(args.datadir):
         print("Data root directory " + args.datadir + " doesn't exists!")
         exit(1)
-    seq_ids, bagnames = parseSeqIdAndBagnamesFromSequenceFile(args.seqfile)
-    for seq_id, bagname in zip(seq_ids, bagnames):
+    _, bagnames = parseSeqIdAndBagnamesFromSequenceFile(args.seqfile)
+    for id, bagname in enumerate(bagnames):
         droid_input_dir = os.path.join(args.datadir, kDroidInDirName, bagname)
         if not os.path.exists(droid_input_dir):
             print("Droid slam input directory " + droid_input_dir + "doesn't exists!")
@@ -205,7 +205,7 @@ if __name__ == '__main__':
         droid_output_dir = os.path.join(args.datadir, kDroidOutDirName)
         if not os.path.exists(droid_output_dir):
             os.mkdir(args.reconstruction_path)
-        args.reconstruction_path = os.path.join(droid_output_dir, str(seq_id)+"_"+bagname)
+        args.reconstruction_path = os.path.join(droid_output_dir, str(id)+"_"+bagname)
         if not os.path.exists(args.reconstruction_path):
             os.mkdir(args.reconstruction_path)
         
@@ -217,7 +217,7 @@ if __name__ == '__main__':
         else:
             args.stereo = True
             imgStreamFunc = partial(rectified_stereo_image_stream, datapath=args.imagedir, right_data_path=args.right_imagedir, calib=args.calib, stride=args.stride)
-        torch.multiprocessing.set_start_method('spawn')
+        torch.multiprocessing.set_start_method('spawn', force=True)
 
         droid = None
 
@@ -263,9 +263,6 @@ if __name__ == '__main__':
             fp.write("\n")
         fp.close()
         print("Done with saving trajectory")
-
-        print(traj_est)
-        print(traj_est.shape)
 
         # traj_est = PoseTrajectory3D(
         #     positions_xyz=traj_est[:,:3],

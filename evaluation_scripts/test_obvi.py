@@ -11,6 +11,7 @@ import glob
 import time
 import argparse
 import pandas as pd
+from scipy.spatial.transform import Rotation as R
 
 from functools import partial
 from torch.multiprocessing import Process
@@ -21,7 +22,7 @@ from droid import Droid
 import torch.nn.functional as F
 
 
-kTrajFilename = "Trajectory.csv"
+kTrajFilename = "trajectory.csv"
 
 def show_image(image):
     image = image.permute(1, 2, 0).cpu().numpy()
@@ -63,6 +64,18 @@ def image_stream(imagedir, calib, stride):
 
 # TODO using length of calib to understand what to do
 def rectified_stereo_image_stream(datapath, right_data_path, calib, image_size=[280, 512], stride=1):
+    K_l = np.array([560.1915283203125, 0.0, 490.475341796875, 0.0, 560.1915283203125, 296.8459777832031, 0.0, 0.0, 1.0]).reshape(3, 3)
+    d_l = np.array([0, 0, 0, 0, 0])
+    R_l = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).reshape(3, 3)
+    P_l = np.array(
+        [560.1915283203125, 0.0, 490.475341796875, 0.0, 0.0, 560.1915283203125, 296.8459777832031, 0.0, 0.0, 0.0, 1.0, 0.0]).reshape(3,4)
+
+    K_r = np.array([560.1915283203125, 0.0, 490.475341796875, 0.0, 560.1915283203125, 296.8459777832031, 0.0, 0.0, 1.0]).reshape(3, 3)
+    d_r = np.array([0, 0, 0, 0, 0]).reshape(5)
+    R_r = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).reshape(3, 3)
+    P_r = np.array(
+        [560.1915283203125, 0.0, 490.475341796875, -67.14397430419922, 0.0, 560.1915283203125, 296.8459777832031, 0.0, 0.0, 0.0, 1.0, 0.0]).reshape(3, 4)
+    
     calib = np.loadtxt(calib, delimiter=" ")
     fx, fy, cx, cy = calib[:4]
 
@@ -85,6 +98,11 @@ def rectified_stereo_image_stream(datapath, right_data_path, calib, image_size=[
 
         # leftImg = cv2.resize(leftImg, (w1, h1))
         # rightImg = cv2.resize(rightImg, (w1, h1))
+
+        map_l = cv2.initUndistortRectifyMap(K_l, d_l, R_l, P_l[:3, :3], (w0, h0), cv2.CV_32F)
+        map_r = cv2.initUndistortRectifyMap(K_r, d_r, R_r, P_r[:3, :3], (w0, h0), cv2.CV_32F)
+        leftImg = cv2.remap(leftImg, map_l[0], map_l[1], interpolation=cv2.INTER_LINEAR)
+        rightImg = cv2.remap(cv2.imread(imgR), map_r[0], map_r[1], interpolation=cv2.INTER_LINEAR)
         images =[leftImg]; images += [rightImg]
         images = torch.from_numpy(np.stack(images, 0))
         images = images.permute(0, 3, 1, 2).to("cuda:0", dtype=torch.float32)
@@ -217,29 +235,15 @@ if __name__ == '__main__':
         print("Failed to open file " + savepath)
         exit(1)
     fp.write("seconds, nanoseconds, lost, transl_x, transl_y, transl_z, quat_x, quat_y, quat_z, quat_w\n")
+    R_offset = R.from_matrix([[-1,0,0],[0,-1,0],[0,0,1]])
     for i, pose in enumerate(traj_est):
+        transl = pose[:3]
+        quat = R.from_quat([pose[4], pose[5], pose[6], pose[3]])
+        quat = R.from_matrix(quat.as_matrix() @ R_offset.as_matrix()).as_quat()
         fp.write(str(timestamps[i][0]) + ", " + str(timestamps[i][1]))
         fp.write(", 0") # hardcoding lost to be 0
-        fp.write(", " + str(pose[0]) + ", " + str(pose[1]) + ", " + str(pose[2]) \
-                 + ", " + str(pose[6]) + ", " + str(pose[4]) + ", " + str(pose[5]) + ", " + str(pose[6]) )
+        fp.write(", " + str(transl[0]) + ", " + str(transl[1]) + ", " + str(transl[2]) \
+                 + ", " + str(quat[0]) + ", " + str(quat[1]) + ", " + str(quat[2]) + ", " + str(quat[3]) )
         fp.write("\n")
     fp.close()
     print("Done with saving trajectory")
-
-    print(traj_est)
-    print(traj_est.shape)
-
-    # print("-----before-----")
-    # print("positions_xyz shape: ", traj_est[:,:3].shape)
-    # print("orientations_quat_wxyz shape: ", traj_est[:,3:].shape)
-    # print("tstamps shape: ", tstamps.shape)
-    traj_est = PoseTrajectory3D(
-        positions_xyz=traj_est[:,:3],
-        orientations_quat_wxyz=traj_est[:,3:],
-        timestamps=np.array(tstamps))
-    # print("-----after-----")
-    # print("positions_xyz shape: ", traj_est[:,:3].shape)
-    # print("orientations_quat_wxyz shape: ", traj_est[:,3:].shape)
-    # print("tstamps shape: ", tstamps.shape)
-    # print("traj_est: ", traj_est)
-    # print("After obtaining traj_est") 
