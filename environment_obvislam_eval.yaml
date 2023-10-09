@@ -1,4 +1,4 @@
-name: droidenv2
+name: droidenv_obvislam_eval
 channels:
   - pyg
   - pytorch
