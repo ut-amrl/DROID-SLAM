@@ -8,6 +8,7 @@ Here's a setup guide for DROID-SLAM Evaluation. If you encountered any questions
 1. Clone the repo using the `--recursive` flag
 ```Bash
 git clone --recursive https://github.com/princeton-vl/DROID-SLAM.git
+git checkout ObViSLAMEvaluation
 ```
 
 2. Creating a new anaconda environment using the provided .yaml file. Using the following command, you'll get a conda environment named `droidenv_obvislam_eval`.
